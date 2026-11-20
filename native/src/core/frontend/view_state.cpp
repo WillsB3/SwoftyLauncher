@@ -21,7 +21,6 @@ namespace {
 
 using frontend::view_flow::G_CUTSCENE;
 using frontend::view_flow::G_DRIVING;
-using frontend::view_flow::G_PAUSE;
 using frontend::view_flow::G_REPLAY;
 using frontend::view_flow::G_SESSION;
 using frontend::view_flow::G_SPECTATE;
@@ -141,11 +140,12 @@ void ViewState::recompute()
     uint32_t g = groups_active();
     bool in_session = g & G_SESSION;
     bool driving = g & G_DRIVING;
-    bool paused = (g & G_PAUSE) && in_session;
     bool replay = g & G_REPLAY;
     bool cutscene = g & G_CUTSCENE;
     bool spectating = g & G_SPECTATE;
     bool is_photo = photo.load(std::memory_order_relaxed);
+
+    const bool paused = in_session && (driving || replay) && pause_mask.load(std::memory_order_relaxed) != 0;
 
     uint32_t flags = 0;
     if (paused)
@@ -158,7 +158,7 @@ void ViewState::recompute()
         flags |= frontend::view::CUTSCENE;
     if (spectating)
         flags |= frontend::view::SPECTATING;
-    bool player_view = in_session && (driving || paused);
+    bool player_view = in_session && driving;
     if (!in_session || !(player_view || replay || cutscene || spectating || is_photo))
         flags |= frontend::view::MENU;
 
@@ -173,7 +173,8 @@ void ViewState::recompute()
     } else {
         int cam = camera_value.load(std::memory_order_relaxed);
         kind = trust_camera ? camera_kind(cam) : frontend::view::UNKNOWN;
-        if (kind == frontend::view::UNKNOWN)
+        // Pause is known even if this build cannot identify the driving camera.
+        if (kind == frontend::view::UNKNOWN && !paused)
             valid = false;
     }
 
@@ -219,9 +220,17 @@ void ViewState::pause(safetyhook::Context &ctx)
     int bit = int(uint32_t(ctx.r8));
     if (bit < 0 || bit >= 32)
         return;
-    uint32_t before = pause_mask.load(std::memory_order_relaxed);
-    uint32_t mask = set ? (before | 1u << bit) : (before & ~(1u << bit));
-    pause_mask.store(mask, std::memory_order_relaxed);
+    uint32_t before, mask;
+    {
+        std::lock_guard lock(change_lock);
+        before = pause_mask.load(std::memory_order_relaxed);
+        mask = set ? (before | 1u << bit) : (before & ~(1u << bit));
+        if (before != mask) {
+            pause_mask.store(mask, std::memory_order_relaxed);
+            if (frontend::view::pause_edge(before, mask) != frontend::view::PauseEdge::none)
+                recompute_locked();
+        }
+    }
     if (pause_logged.fetch_add(1, std::memory_order_relaxed) < 64)
         swofty::log("[view] pause reason bit %d %s, mask %08x", bit, set ? "set" : "cleared", mask);
     switch (frontend::view::pause_edge(before, mask)) {
