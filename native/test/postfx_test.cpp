@@ -554,6 +554,8 @@ int main()
 
     When no_pause{0, flag_bit("paused")};
     CHECK(!ineligible(no_pause, UNKNOWN, PAUSED, false));
+    CHECK(ineligible(no_pause, UNKNOWN, PAUSED, true));
+    CHECK(ineligible(driving, UNKNOWN, PAUSED, true));
     CHECK(ineligible(no_pause, OTHER, PAUSED, true));
 
     CHECK(view_bit("nope") == 0 && flag_bit("nope") == 0 && view_bit("unknown") == 0);

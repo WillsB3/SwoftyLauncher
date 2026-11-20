@@ -9,7 +9,7 @@
 // name that a real run logged, either as a "[career] flow" line or in the "[direct] flow node" graph dump.
 namespace frontend::view_flow {
 
-enum Group : uint32_t { G_DRIVING = 1, G_PAUSE = 2, G_REPLAY = 4, G_CUTSCENE = 8, G_SPECTATE = 16, G_SESSION = 32 };
+enum Group : uint32_t { G_DRIVING = 1, G_REPLAY = 4, G_CUTSCENE = 8, G_SPECTATE = 16, G_SESSION = 32 };
 
 struct Tracked {
     uint32_t hash;
@@ -45,7 +45,7 @@ constexpr Tracked TRACKED[] = {
 constexpr size_t TRACKED_N = sizeof TRACKED / sizeof TRACKED[0];
 static_assert(TRACKED_N <= 64, "the active set is one word");
 
-constexpr uint32_t GROUP_MASK_ALL = G_DRIVING | G_PAUSE | G_REPLAY | G_CUTSCENE | G_SPECTATE | G_SESSION;
+constexpr uint32_t GROUP_MASK_ALL = G_DRIVING | G_REPLAY | G_CUTSCENE | G_SPECTATE | G_SESSION;
 
 constexpr uint32_t group_of(uint32_t hash)
 {
