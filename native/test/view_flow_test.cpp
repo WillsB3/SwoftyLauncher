@@ -95,6 +95,38 @@ int main()
     camera.update_phase(false, false);
     expect(!camera.observe(0, 5) && camera.kind() == UNKNOWN, "session exit drops the saved camera");
 
+    // A same-camera return may not write the viewport type again. Recover only from a matching live read.
+    camera.update_phase(true, false);
+    camera.observe(0, 3);
+    camera.update_phase(true, true);
+    expect(!camera.recover_live(3), "never recover a live kind during replay");
+    camera.observe(0, 3);
+    camera.update_phase(true, false);
+    expect(camera.needs_replay_recovery(), "same-camera replay exit can be recovered");
+    expect(!camera.recover_live(4) && camera.kind() == UNKNOWN, "a different viewport type cannot seed recovery");
+    expect(camera.recover_live(3) && camera.kind() == COCKPIT, "restore cockpit from the confirmed primary viewport");
+    camera.update_phase(true, true);
+    camera.observe(0, 4);
+    camera.update_phase(true, false);
+    expect(!camera.recover_live(4), "a replay camera different from the live view cannot seed recovery");
+    camera.observe(0, 3);
+    camera.update_phase(true, true);
+    camera.observe(0, 3);
+    camera.update_phase(true, false);
+    camera.observe(0, 5);
+    expect(!camera.recover_live(3) && camera.kind() == TCAM_OFFSET, "a fresh live assignment wins");
+    camera.update_phase(true, true);
+    camera.observe(0, 5);
+    camera.update_phase(true, false);
+    camera.update_phase(false, false);
+    camera.update_phase(true, false);
+    expect(!camera.recover_live(5), "recovery does not cross sessions");
+    camera.observe(0, 8);
+    camera.update_phase(true, true);
+    camera.observe(0, 8);
+    camera.update_phase(true, false);
+    expect(!camera.recover_live(8), "an unclassified viewport cannot restore a live view");
+
     expect(is_reverse_pod("pod_reverse") && is_reverse_pod("podoff_reverse"), "recognize both reverse-pod definitions");
     expect(!is_reverse_pod("pod") && !is_reverse_pod("pod_reverse_extra") && !is_reverse_pod("s01a_cam") && !is_reverse_pod(""),
            "forward, unrelated and unavailable definitions are not reverse pods");
