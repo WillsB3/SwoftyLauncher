@@ -81,6 +81,7 @@ private:
     uint32_t groups_active();
     void recompute();
     void recompute_locked();
+    void recover_replay_view();
     Kind classify_fallback_camera(const safetyhook::Context &ctx) const;
 
     safetyhook::MidHook h_photo_on, h_photo_off, h_camera_setting, h_pause, h_viewport_camera;
@@ -92,6 +93,9 @@ private:
     std::atomic<uint32_t> pause_mask{0};
     std::mutex change_lock;
     ViewportCamera assigned_camera;
+    uintptr_t primary_record = 0;
+    uintptr_t observed_primary_camera = 0;
+    bool instant_replay_exited = false;
     std::vector<CameraUid> trackside_camera_uids;
     bool trust_camera = false;
     std::atomic<int> pause_logged{0};
@@ -286,6 +290,9 @@ void ViewState::viewport_camera(safetyhook::Context &ctx)
     std::lock_guard lock(change_lock);
     if (!(groups_active() & G_SESSION))
         return;
+    // The assignment hook runs after the current camera object has been stored in the viewport record.
+    primary_record = ctx.rbp + ctx.r13 * 8;
+    observed_primary_camera = ctx.r14;
     const auto type = uint8_t(ctx.rax);
     const Kind fallback = type == 8 ? classify_fallback_camera(ctx) : OTHER;
     if (assigned_camera.observe(viewport, type, fallback))
@@ -329,6 +336,20 @@ safetyhook::MidHook install(const runtime::Sig &sig, safetyhook::MidHookFn fn)
     return std::move(*h);
 }
 
+void ViewState::recover_replay_view()
+{
+    if (!assigned_camera.needs_replay_recovery() || !primary_record || !observed_primary_camera)
+        return;
+
+    // Read only the session's last observed primary record, and require the camera object to still match.
+    // The type byte is the same build-verified field that the assignment hook observes.
+    uintptr_t camera = 0;
+    uint8_t type = 0;
+    if (swofty::mem::read(primary_record, camera) && camera == observed_primary_camera &&
+        swofty::mem::read(primary_record + 0x20, type) && assigned_camera.recover_live(type))
+        swofty::log("[view] recovered %s on return from Instant Replay", kind_text(assigned_camera.kind()));
+}
+
 void ViewState::flow(uint32_t hash, uint32_t to)
 {
     std::lock_guard lock(change_lock);
@@ -340,8 +361,24 @@ void ViewState::flow(uint32_t hash, uint32_t to)
             active.fetch_or(bit, std::memory_order_relaxed);
         else if (to == 0 || to == 3)
             active.fetch_and(~bit, std::memory_order_relaxed);
-        if (TRACKED[i].group == G_SESSION && (to == 0 || to == 3))
+        const auto group = TRACKED[i].group;
+        if (group == G_SESSION && (to == 0 || to == 3)) {
             trackside_camera_uids.clear();
+            primary_record = 0;
+            observed_primary_camera = 0;
+            instant_replay_exited = false;
+        }
+        if ((group == G_REPLAY || group == G_CUTSCENE || group == G_SPECTATE) && to == 1)
+            instant_replay_exited = false;
+        if (hash == view_flow::djb2("InstantReplay") && to == 3)
+            instant_replay_exited = bool(groups_active() & G_SESSION);
+        if (group == G_DRIVING && to == 2 && instant_replay_exited) {
+            instant_replay_exited = false;
+            const auto groups = groups_active();
+            // The camera can still be the last replay view at InGame Entering.
+            if ((groups & (G_SESSION | G_REPLAY | G_CUTSCENE | G_SPECTATE)) == G_SESSION)
+                recover_replay_view();
+        }
         if (TRACKED[i].group == G_REPLAY && (to == 0 || to == 3) && photo.exchange(false))
             swofty::log("[view] photo mode cleared by the replay state leaving");
         break;
